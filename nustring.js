@@ -4,6 +4,7 @@ window.nustring = window.nustring || {};
     nustring.config = {};
     (function (config) {
         config.debug = true;
+        config.maxDelaySamps = 960;
     })(nustring.config);
 
     nustring.classes = {};
@@ -12,7 +13,7 @@ window.nustring = window.nustring || {};
             this.buffer = new Float32Array(maxDelaySamps);
             this.bufferLen = maxDelaySamps;
             this.writeIdx = 0;
-        }
+        };
         DelayLine.prototype.readOne = function (delaySamps) {
             var readIdx = this.writeIdx - delaySamps;
             while (readIdx < 0) {
@@ -28,14 +29,15 @@ window.nustring = window.nustring || {};
             }
         };
 
-        var KarplusStrongString = classes.KarplusStrongString = function (audioCtx) {
-            this.kslen = 256;
-
+        var KarplusStrongString = classes.KarplusStrongString = function (audioCtx, maxDelaySamps) {
             this.audioCtx = audioCtx;
-            this.noiseBurstRemaining = 0;
+
+            this.ksLength = 256;
+            this.pluckRemaining = 0;
+            this.pluckIntensity = 0;
 
             var scriptProcessor = audioCtx.createScriptProcessor(1024, 1, 1);
-            var delayLine = new DelayLine(this.kslen);
+            var delayLine = new DelayLine(maxDelaySamps);
             var filterPrev = 0.0;
 
             var that = this;
@@ -50,12 +52,13 @@ window.nustring = window.nustring || {};
 
                     for (var i = 0; i < input.length; ++i) {
                         var noise = 0.0;
-                        if (that.noiseBurstRemaining > 0) {
+                        if (that.pluckRemaining > 0) {
                             noise = (Math.random() * 2.0) - 1.0;
-                            --that.noiseBurstRemaining;
+                            noise *= that.pluckIntensity;
+                            --that.pluckRemaining;
                         }
 
-                        var feedback = delayLine.readOne(that.kslen);
+                        var feedback = delayLine.readOne(that.ksLength);
                         var filteredFeedback = (filterPrev + feedback) * 0.5;
                         filterPrev = feedback;
 
@@ -70,26 +73,34 @@ window.nustring = window.nustring || {};
             this.scriptProcessor = scriptProcessor;
         };
         KarplusStrongString.prototype.pluck = function(pluckIntensity) {
-            this.noiseBurstRemaining = this.kslen;
-            console.log(this.noiseBurstRemaining);
+            this.pluckRemaining = this.ksLength;
+            this.pluckIntensity = pluckIntensity;
+            if (config.debug) {
+                console.log(this.pluckRemaining);
+            }
+        };
+        KarplusStrongString.prototype.setLength = function(lengthSamples) {
+            this.ksLength = lengthSamples;
         };
     })(nustring.config, nustring.classes);
 
     nustring.client = {};
-    (function (config, classes, client) {
+    (function ($, config, classes, client) {
         var canvasBuffer = document.createElement('canvas');
         var canvasBufferCtx = canvasBuffer.getContext('2d');
         var canvas = null;
         var canvasCtx = null;
+        var string = null;
 
         var onWindowResize = function (event) {
             canvasWidth = $(window).width();
             canvasHeight = $(window).height();
-            canvasBuffer.width = canvasWidth;
-            canvasBuffer.height = canvasHeight;
-            canvas.width = canvasWidth;
-            canvas.height = canvasHeight;
-            repaintFull();
+            //canvasBuffer.width = canvasWidth;
+            //canvasBuffer.height = canvasHeight;
+            //canvas.width = canvasWidth;
+            //canvas.height = canvasHeight;
+            string.setLength(Math.min(Math.round(canvasWidth / 2), config.maxDelaySamps));
+            //repaintFull();
         };
 
         var onDomKeyDown = function (event) {
@@ -144,23 +155,23 @@ window.nustring = window.nustring || {};
             canvas = $canvas.get(0);
             canvasCtx = canvas.getContext('2d');
 
-            $(window).resize(onWindowResize);
-            onWindowResize();
-
             $canvas.on('mousedown', onCanvasMouseDown);
             $canvas.on('mousemove', onCanvasMouseMove)
             */
 
             var audioCtx = new window.AudioContext();
 
-            var string = new classes.KarplusStrongString(audioCtx);
+            string = new classes.KarplusStrongString(audioCtx, config.maxDelaySamps);
             string.scriptProcessor.connect(audioCtx.destination);
+
+            $(window).resize(onWindowResize);
+            onWindowResize();
 
             var button = $('#pluck');
             //button.on('click', function () {console.log('hay')});
-            button.on('click', function () {string.pluck.call(string, 0.0);});
+            button.on('click', function () {string.pluck.call(string, Math.random());});
         };
-    })(nustring.config, nustring.classes, nustring.client);
+    })($, nustring.config, nustring.classes, nustring.client);
 
     $(document).ready(nustring.client.onDomReady);
 })(window.$, window.nustring);
