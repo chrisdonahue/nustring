@@ -5,6 +5,11 @@ window.nustring = window.nustring || {};
     (function (config) {
         config.debug = true;
         config.maxDelaySamps = 960;
+        config.stringMaxDeviation = 32;
+        config.stringThickness = 4;
+        config.gain = 1.0;
+        config.controlPointSpacing = 50;
+        config.stringGfxPhaseInc = 0.5;
     })(nustring.config);
 
     nustring.classes = {};
@@ -35,6 +40,7 @@ window.nustring = window.nustring || {};
             this.ksLength = 256;
             this.pluckRemaining = 0;
             this.pluckIntensity = 0;
+            this.rmsAmp = 0.0;
 
             var scriptProcessor = audioCtx.createScriptProcessor(1024, 1, 1);
             var delayLine = new DelayLine(maxDelaySamps);
@@ -45,6 +51,8 @@ window.nustring = window.nustring || {};
             scriptProcessor.onaudioprocess = function (event) {
                 var input = event.inputBuffer;
                 var output = event.outputBuffer;
+
+                var rmsTotal = 0.0;
 
                 for (var channel = 0; channel < output.numberOfChannels; ++channel) {
                     var inputChannel = input.getChannelData(channel);
@@ -66,7 +74,10 @@ window.nustring = window.nustring || {};
 
                         outputChannel[i] = output;
                         delayLine.writeOne(output);
+
+                        rmsTotal += output * output;
                     }
+                    that.rmsAmp = Math.sqrt(rmsTotal / input.length);
                 }
             };
 
@@ -82,48 +93,32 @@ window.nustring = window.nustring || {};
         KarplusStrongString.prototype.setLength = function(lengthSamples) {
             this.ksLength = lengthSamples;
         };
+        KarplusStrongString.prototype.getRmsAmp = function() {
+            return this.rmsAmp;
+        };
     })(nustring.config, nustring.classes);
 
     nustring.client = {};
     (function ($, config, classes, client) {
+        var audioCtx = null;
+        var string = null;
+        var stringGfxPhase = 0.0;
+
+        var canvasWidth = 0;
+        var canvasHeight = 0;
         var canvasBuffer = document.createElement('canvas');
         var canvasBufferCtx = canvasBuffer.getContext('2d');
         var canvas = null;
         var canvasCtx = null;
-        var string = null;
 
         var onWindowResize = function (event) {
             canvasWidth = $(window).width();
-            canvasHeight = $(window).height();
-            //canvasBuffer.width = canvasWidth;
-            //canvasBuffer.height = canvasHeight;
-            //canvas.width = canvasWidth;
-            //canvas.height = canvasHeight;
-            string.setLength(Math.min(Math.round(canvasWidth / 2), config.maxDelaySamps));
-            //repaintFull();
-        };
+            canvasBuffer.width = canvasWidth;
+            canvas.width = canvasWidth;
 
-        var onDomKeyDown = function (event) {
-            var keyNum = event.which;
-            if (keyNum == config.actionToKeyNum.UP) {
-                updatePlayerCoord(makeCoord(0, -1));
-            }
-            else if (keyNum == config.actionToKeyNum.DOWN) {
-                updatePlayerCoord(makeCoord(0, 1));
-            }
-            else if (keyNum == config.actionToKeyNum.LEFT) {
-                updatePlayerCoord(makeCoord(-1, 0));
-            }
-            else if (keyNum == config.actionToKeyNum.RIGHT) {
-                updatePlayerCoord(makeCoord(1, 0));
-            }
-            else if (keyNum == config.actionToKeyNum.SHOOT) {
-                console.log('shoot');
-            }
-            else {
-                //console.log('unknown key');
-            }
-            repaintObjects();
+            string.setLength(Math.min(Math.round(canvasWidth / 2), config.maxDelaySamps));
+
+            repaintFull();
         };
 
         var repaintBuffer = function () {
@@ -131,16 +126,37 @@ window.nustring = window.nustring || {};
 
             // clear buffer
             ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-            ctx.fillStyle = 'black';
-            ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+            if (config.debug) {
+                ctx.fillStyle = 'green';
+                ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+            }
         };
 
         var repaintObjects = function () {
             var ctx = canvasCtx;
 
-            // draw mouse
+            // draw buffer
             ctx.clearRect(0, 0, canvasWidth, canvasHeight);
             ctx.drawImage(canvasBuffer, 0, 0);
+
+            // draw line
+            var stringY = config.stringMaxDeviation - (config.stringThickness / 2);
+            var rmsAmp = string.getRmsAmp();
+            var stringDevRel = Math.sin(stringGfxPhase) * rmsAmp;
+            var stringDevAbs = stringDevRel * config.stringMaxDeviation;
+
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = config.stringThickness;
+            ctx.beginPath();
+            ctx.moveTo(0, stringY);
+            ctx.bezierCurveTo(
+                0, stringY + stringDevAbs,
+                canvasWidth, stringY + stringDevAbs,
+                canvasWidth, stringY
+            )
+            ctx.stroke();
+
+            stringGfxPhase += config.stringGfxPhaseInc;
         };
 
         var repaintFull = function () {
@@ -148,28 +164,42 @@ window.nustring = window.nustring || {};
             repaintObjects();
         };
 
+        var animate = function () {
+            repaintFull();
+            window.requestAnimationFrame(animate);
+        };
+
         // exports
         client.onDomReady = function (event) {
             /*
-            canvas = document.getElementById('#nustring')
-            canvas = $canvas.get(0);
-            canvasCtx = canvas.getContext('2d');
-
             $canvas.on('mousedown', onCanvasMouseDown);
             $canvas.on('mousemove', onCanvasMouseMove)
             */
 
-            var audioCtx = new window.AudioContext();
-
+            // init audio
+            audioCtx = new window.AudioContext();
             string = new classes.KarplusStrongString(audioCtx, config.maxDelaySamps);
-            string.scriptProcessor.connect(audioCtx.destination);
+            var gainNode = audioCtx.createGain();
+            gainNode.gain.value = config.gain;
+            string.scriptProcessor.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
 
+            // init video
+            var $canvas = $('#nustring');
+            canvas = $canvas.get(0);
+            canvasCtx = canvas.getContext('2d');
+            canvasHeight = config.stringMaxDeviation * 2;
+            canvas.height = canvasHeight;
+            canvasBuffer.height = canvasHeight;
+
+            // attach callbacks
             $(window).resize(onWindowResize);
             onWindowResize();
-
             var button = $('#pluck');
-            //button.on('click', function () {console.log('hay')});
             button.on('click', function () {string.pluck.call(string, Math.random());});
+
+            // start animation
+            animate();
         };
     })($, nustring.config, nustring.classes, nustring.client);
 
